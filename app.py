@@ -13,9 +13,12 @@ body{font-family:system-ui,Arial,sans-serif;margin:24px}
 .topbar{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
 .badge{background:#eee;padding:2px 8px;border-radius:999px;font-size:12px}
 a{text-decoration:none}
+.alert{background:#fff3cd;border:1px solid #ffeeba;padding:10px;border-radius:8px;margin:16px 0;color:#856404}
+.empty{color:#666;margin-top:16px}
 </style></head><body><div class="wrap">
 <h1>Trend Dashboard</h1>
-<div class="meta">Live RSS feed. Use the filters. Click ↻ to fetch now.</div>
+
+{% if warning %}<div class="alert">{{ warning }}</div>{% endif %}
 
 <form class="topbar" method="get">
   <label>Time window:
@@ -37,73 +40,104 @@ a{text-decoration:none}
   <a href="{{ url_for('force_refresh') }}">↻ fetch now</a>
 </form>
 
-{% for it in items %}
-  <div class="item">
-    <div class="title"><a href="{{ it['url'] }}" target="_blank" rel="noopener">{{ it['title'] }}</a></div>
-    <div class="meta">{{ it['source'] }} — {{ it['published_at'] }} UTC</div>
-    {% if it['summary_raw'] %}
-      <div>{{ it['summary_raw'][:280] }}{% if it['summary_raw']|length > 280 %}…{% endif %}</div>
-    {% endif %}
-  </div>
-{% endfor %}
+{% if items %}
+  {% for it in items %}
+    <div class="item">
+      <div class="title"><a href="{{ it['url'] }}" target="_blank" rel="noopener">{{ it['title'] }}</a></div>
+      <div class="meta">{{ it['source'] }} — {{ it['published_at'] }} UTC</div>
+      {% if it['summary_raw'] %}
+        <div>{{ it['summary_raw'][:280] }}{% if it['summary_raw']|length > 280 %}…{% endif %}</div>
+      {% endif %}
+    </div>
+  {% endfor %}
+{% else %}
+  <div class="empty">No items yet. This is normal if the background worker hasn't run.</div>
+{% endif %}
 </div></body></html>"""
 
-def get_conn():
-    # Render env var we set earlier
-    url = os.environ["DATABASE_URL"]
-    return psycopg2.connect(url, sslmode="require")
-
 app = Flask(__name__)
+
+def try_get_conn():
+    url = os.environ.get("DATABASE_URL")
+    if not url:
+        return None, "DATABASE_URL is not set on the Web Service. Add it in Render → Settings → Environment."
+    try:
+        conn = psycopg2.connect(url, sslmode="require")
+        return conn, None
+    except Exception as ex:
+        return None, f"Could not connect to the database: {ex}"
+
+@app.route("/health")
+def health():
+    return "ok"
 
 @app.route("/")
 def index():
     hours = int(request.args.get("hours", 12))
     source = request.args.get("source", "")
-    with get_conn() as conn, conn.cursor() as cur:
-        if source:
-            cur.execute("""
-              SELECT source, title, url, published_at, summary_raw
-              FROM items
-              WHERE source = %s
-                AND published_at >= NOW() - INTERVAL '%s hours'
-              ORDER BY published_at DESC
-              LIMIT 500
-            """, (source, hours))
-        else:
-            cur.execute("""
-              SELECT source, title, url, published_at, summary_raw
-              FROM items
-              WHERE published_at >= NOW() - INTERVAL '%s hours'
-              ORDER BY published_at DESC
-              LIMIT 500
-            """, (hours,))
-        rows = cur.fetchall()
+    items, sources, warning = [], [], None
 
-        cur.execute("SELECT DISTINCT source FROM items ORDER BY source")
-        sources = [r[0] for r in cur.fetchall()]
-
-    items = [{
-        "source": r[0],
-        "title": r[1],
-        "url": r[2],
-        "published_at": r[3].strftime("%Y-%m-%d %H:%M:%S"),
-        "summary_raw": r[4]
-    } for r in rows]
+    conn, warn = try_get_conn()
+    if warn:
+        warning = warn
+    elif conn:
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    # Ensure table exists (safe to run)
+                    cur.execute("""
+                    CREATE TABLE IF NOT EXISTS items (
+                      item_id TEXT PRIMARY KEY,
+                      source TEXT,
+                      title TEXT,
+                      url TEXT,
+                      published_at TIMESTAMPTZ,
+                      summary_raw TEXT,
+                      fetched_at TIMESTAMPTZ DEFAULT NOW()
+                    );
+                    """)
+                    if source:
+                        cur.execute("""
+                          SELECT source, title, url, published_at, summary_raw
+                          FROM items
+                          WHERE source = %s
+                            AND published_at >= NOW() - INTERVAL '%s hours'
+                          ORDER BY published_at DESC
+                          LIMIT 500
+                        """, (source, hours))
+                    else:
+                        cur.execute("""
+                          SELECT source, title, url, published_at, summary_raw
+                          FROM items
+                          WHERE published_at >= NOW() - INTERVAL '%s hours'
+                          ORDER BY published_at DESC
+                          LIMIT 500
+                        """, (hours,))
+                    rows = cur.fetchall()
+                    cur.execute("SELECT DISTINCT source FROM items ORDER BY source")
+                    sources = [r[0] for r in cur.fetchall()]
+                    items = [{
+                        "source": r[0],
+                        "title": r[1],
+                        "url": r[2],
+                        "published_at": r[3].strftime("%Y-%m-%d %H:%M:%S"),
+                        "summary_raw": r[4]
+                    } for r in rows]
+        except Exception as ex:
+            warning = f"There was a database error: {ex}"
+        finally:
+            try:
+                conn.close()
+            except:
+                pass
 
     return render_template_string(HTML,
-        items=items, hours=hours, source=source, sources=sources, count=len(items))
+        items=items, hours=hours, source=source, sources=sources, count=len(items), warning=warning)
 
 @app.route("/refresh")
 def force_refresh():
-    # This will just bounce back to the homepage.
-    # The background worker actually fetches new items.
+    # Without a worker this just reloads the page
     return redirect(url_for("index"))
-@app.route("/health")
-def health():
-    return "ok"
-
 
 if __name__ == "__main__":
-    # Local dev only; Render uses gunicorn
     app.run(host="0.0.0.0", port=5000)
-
