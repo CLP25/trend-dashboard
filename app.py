@@ -74,7 +74,7 @@ def health():
 @app.route("/")
 def index():
     hours = int(request.args.get("hours", 12))
-    source = request.args.get("source", "")
+    selected_source = request.args.get("source", "")
     items, sources, warning = [], [], None
 
     conn, warn = try_get_conn()
@@ -95,23 +95,24 @@ def index():
                       fetched_at TIMESTAMPTZ DEFAULT NOW()
                     );
                     """)
-                    if source:
-                        cur.execute("""
-                          SELECT source, title, url, published_at, summary_raw
-                          FROM items
-                          WHERE source = %s
-                            AND published_at >= NOW() - INTERVAL '%s hours'
-                          ORDER BY published_at DESC
-                          LIMIT 500
-                        """, (source, hours))
-                    else:
-                        cur.execute("""
-                          SELECT source, title, url, published_at, summary_raw
-                          FROM items
-                          WHERE published_at >= NOW() - INTERVAL '%s hours'
-                          ORDER BY published_at DESC
-                          LIMIT 500
-                        """, (hours,))
+                   if selected_source:
+    cur.execute("""
+      SELECT source, title, url, published_at, summary_raw
+      FROM items
+      WHERE source = %s
+        AND published_at >= NOW() - INTERVAL '%s hours'
+      ORDER BY published_at DESC
+      LIMIT 500
+    """, (selected_source, hours))
+else:
+    cur.execute("""
+      SELECT source, title, url, published_at, summary_raw
+      FROM items
+      WHERE published_at >= NOW() - INTERVAL '%s hours'
+      ORDER BY published_at DESC
+      LIMIT 500
+    """, (hours,))
+
                     rows = cur.fetchall()
                     cur.execute("SELECT DISTINCT source FROM items ORDER BY source")
                     sources = [r[0] for r in cur.fetchall()]
