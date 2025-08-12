@@ -84,7 +84,6 @@ def index():
         try:
             with conn:
                 with conn.cursor() as cur:
-                    # Ensure table exists (safe to run)
                     cur.execute("""
                     CREATE TABLE IF NOT EXISTS items (
                       item_id TEXT PRIMARY KEY,
@@ -131,13 +130,20 @@ def index():
             except:
                 pass
 
-    return render_template_string(HTML,
-        items=items, hours=hours, source=source, sources=sources, count=len(items), warning=warning)
+    return render_template_string(
+        HTML,
+        items=items,
+        hours=hours,
+        source=source,
+        sources=sources,
+        count=len(items),
+        warning=warning
+    )
 
 @app.route("/refresh")
 def force_refresh():
-    # Without a worker this just reloads the page
     return redirect(url_for("index"))
 
 if __name__ == "__main__":
+    # Local dev only; on Render we use gunicorn
     app.run(host="0.0.0.0", port=5000)
