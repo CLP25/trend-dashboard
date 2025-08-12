@@ -98,6 +98,10 @@ def force_refresh():
     # This will just bounce back to the homepage.
     # The background worker actually fetches new items.
     return redirect(url_for("index"))
+@app.route("/health")
+def health():
+    return "ok"
+
 
 if __name__ == "__main__":
     # Local dev only; Render uses gunicorn
